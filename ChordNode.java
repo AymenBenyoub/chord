@@ -77,7 +77,7 @@ public class ChordNode {
     public void fixFingers() {
         for (int i = 0; i < HashUtil.M; i++) {
             BigInteger start = self.id.add(BigInteger.valueOf(2).pow(i))
-                    .mod(BigInteger.valueOf(2).pow(HashUtil.M));
+                    .mod(HashUtil.TWO_POW_M);
             NodeInfo oldFinger = finger[i];
             finger[i] = findSuccessor(start);
             if (!finger[i].equals(oldFinger)) {

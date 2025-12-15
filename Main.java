@@ -1,5 +1,18 @@
+import javax.swing.SwingUtilities;
+
 public class Main {
     public static void main(String[] args) throws Exception {
+        if (args.length == 0) {
+            SwingUtilities.invokeLater(() -> {
+                try {
+                    new ChordUI().setVisible(true);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            });
+            return;
+        }
+
         String ip = args[0];
         int port = Integer.parseInt(args[1]);
 
