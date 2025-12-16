@@ -8,9 +8,15 @@ public class ChordNode {
     public volatile NodeInfo successor;
     public volatile NodeInfo predecessor;
     public NodeInfo[] finger;
+    public static final int FILE_PORT_OFFSET = 1000;
+    private FileTransferServer ftServer;
 
     public ChordNode(String ip, int port) {
-        this.self = new NodeInfo(HashUtil.hash(ip + ":" + port), ip, port);
+        this(ip, port, port + FILE_PORT_OFFSET);
+    }
+
+    public ChordNode(String ip, int port, int filePort) {
+        this.self = new NodeInfo(HashUtil.hash(ip + ":" + port), ip, port, filePort);
         this.successor = self;
         this.predecessor = null;
         finger = new NodeInfo[HashUtil.M];
@@ -18,6 +24,77 @@ public class ChordNode {
             finger[i] = self;
 
         logger.info("Node initialized: " + self);
+
+        // start file transfer server on provided file port
+        ftServer = new FileTransferServer(this, filePort);
+        ftServer.start();
+    }
+
+    public boolean sendFile(NodeInfo dest, java.io.File file) {
+        return sendFile(dest, file, null);
+    }
+
+    public boolean sendFile(NodeInfo dest, java.io.File file,
+            java.util.function.BiConsumer<Long, Long> progressCallback) {
+        if (dest == null || file == null || !file.exists())
+            return false;
+        int port = dest.filePort > 0 ? dest.filePort : dest.port + FILE_PORT_OFFSET;
+        final int MAX_RETRIES = 3;
+        final int CONNECT_TIMEOUT = 5000;
+
+        long total = file.length();
+        for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+            try (java.net.Socket s = new java.net.Socket()) {
+                s.connect(new java.net.InetSocketAddress(dest.ip, port), CONNECT_TIMEOUT);
+                s.setSoTimeout(10000);
+                try (java.io.OutputStream out = s.getOutputStream();
+                        java.io.PrintWriter writer = new java.io.PrintWriter(out, true);
+                        java.io.RandomAccessFile raf = new java.io.RandomAccessFile(file, "r")) {
+
+                    // Offer file and ask for existing offset
+                    writer.println("FILE_OFFER " + file.getName() + " " + total);
+                    java.io.BufferedReader in = new java.io.BufferedReader(
+                            new java.io.InputStreamReader(s.getInputStream()));
+                    String resp = in.readLine();
+                    long offset = 0;
+                    if (resp != null && resp.startsWith("OK")) {
+                        String[] toks = resp.split(" ");
+                        if (toks.length >= 2)
+                            offset = Long.parseLong(toks[1]);
+                    }
+
+                    if (offset > 0)
+                        raf.seek(offset);
+                    byte[] buffer = new byte[8192];
+                    long sent = offset;
+                    int r;
+                    while ((r = raf.read(buffer)) != -1) {
+                        out.write(buffer, 0, r);
+                        sent += r;
+                        if (progressCallback != null)
+                            progressCallback.accept(sent, total);
+                    }
+                    out.flush();
+                    logger.info("Sent file " + file.getName() + " to " + dest + " (" + total + " bytes)");
+                    return true;
+                }
+            } catch (Exception e) {
+                logger.warning("File send attempt " + attempt + " failed: " + e.getMessage());
+                try {
+                    Thread.sleep(1000 * attempt);
+                } catch (InterruptedException ignored) {
+                }
+            }
+        }
+        return false;
+    }
+
+    public void notifyFileReceived(java.io.File f) {
+        logger.info("Received file: " + f.getAbsolutePath());
+        try {
+            ChordUI.notifyFileReceived(f);
+        } catch (Throwable ignored) {
+        }
     }
 
     public void join(NodeInfo contact) {

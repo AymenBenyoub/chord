@@ -1,15 +1,21 @@
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.ActionEvent;
+import java.util.*;
 
 public class ChordUI extends JFrame {
     private JTextField ipField = new JTextField("127.0.0.1", 12);
     private JTextField portField = new JTextField("5000", 6);
+    private JTextField filePortField = new JTextField("6000", 6);
     private JTextField contactIpField = new JTextField(12);
     private JTextField contactPortField = new JTextField(6);
     private JTextArea logArea = new JTextArea(20, 50);
+    private DefaultListModel<NodeInfo> peersModel = new DefaultListModel<>();
+    private JList<NodeInfo> peersList = new JList<>(peersModel);
+    private JButton sendFileBtn = new JButton("Send File (placeholder)");
 
     private ChordNode node;
+    private static ChordUI instance;
 
     public ChordUI() {
         super("Chord Node UI");
@@ -29,6 +35,8 @@ public class ChordUI extends JFrame {
         top.add(contactIpField);
         top.add(new JLabel("Contact Port:"));
         top.add(contactPortField);
+        top.add(new JLabel("File Port:"));
+        top.add(filePortField);
 
         JButton startBtn = new JButton("Start Node");
         startBtn.addActionListener(this::onStart);
@@ -53,6 +61,55 @@ public class ChordUI extends JFrame {
         getContentPane().setLayout(new BorderLayout());
         getContentPane().add(top, BorderLayout.NORTH);
 
+        // Left sidebar: peers list + send button
+        JPanel left = new JPanel(new BorderLayout());
+        peersList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        peersList.setVisibleRowCount(10);
+        peersList.addListSelectionListener(e -> {
+            NodeInfo sel = peersList.getSelectedValue();
+            sendFileBtn.setEnabled(sel != null);
+        });
+        JScrollPane peersScroll = new JScrollPane(peersList);
+        left.add(new JLabel("Peers"), BorderLayout.NORTH);
+        left.add(peersScroll, BorderLayout.CENTER);
+        sendFileBtn.setEnabled(false);
+        sendFileBtn.addActionListener(e -> {
+            NodeInfo sel = peersList.getSelectedValue();
+            if (sel == null)
+                return;
+            JFileChooser chooser = new JFileChooser();
+            int ret = chooser.showOpenDialog(this);
+            if (ret != JFileChooser.APPROVE_OPTION)
+                return;
+            java.io.File file = chooser.getSelectedFile();
+            append("Sending " + file.getName() + " to " + sel + "...");
+
+            // progress dialog
+            JDialog dlg = new JDialog(this, "Sending: " + file.getName(), true);
+            JProgressBar bar = new JProgressBar(0, 100);
+            bar.setStringPainted(true);
+            dlg.getContentPane().add(bar);
+            dlg.setSize(400, 80);
+            dlg.setLocationRelativeTo(this);
+
+            new Thread(() -> {
+                boolean[] result = new boolean[1];
+                result[0] = node.sendFile(sel, file, (sent, total) -> {
+                    int pct = total == 0 ? 0 : (int) ((sent * 100) / total);
+                    SwingUtilities.invokeLater(() -> bar.setValue(pct));
+                });
+                SwingUtilities.invokeLater(() -> {
+                    dlg.dispose();
+                    append((result[0] ? "File sent: " : "File send failed: ") + file.getName());
+                });
+            }).start();
+
+            dlg.setVisible(true);
+        });
+        left.add(sendFileBtn, BorderLayout.SOUTH);
+
+        getContentPane().add(left, BorderLayout.WEST);
+
         logArea.setEditable(false);
         JScrollPane scroll = new JScrollPane(logArea);
         getContentPane().add(scroll, BorderLayout.CENTER);
@@ -61,7 +118,14 @@ public class ChordUI extends JFrame {
     private void onStart(ActionEvent e) {
         String ip = ipField.getText().trim();
         int port = Integer.parseInt(portField.getText().trim());
-        node = new ChordNode(ip, port);
+        int filePort;
+        try {
+            filePort = Integer.parseInt(filePortField.getText().trim());
+        } catch (Exception ex) {
+            filePort = port + 1000;
+        }
+        node = new ChordNode(ip, port, filePort);
+        instance = this;
         new Server(node).start();
         append("Node started: " + node.self);
 
@@ -71,7 +135,10 @@ public class ChordUI extends JFrame {
                 while (true) {
                     node.stabilize();
                     node.fixFingers();
-                    SwingUtilities.invokeLater(this::updateStateDisplay);
+                    SwingUtilities.invokeLater(() -> {
+                        updateStateDisplay();
+                        refreshPeers();
+                    });
                     Thread.sleep(15000);
                 }
             } catch (InterruptedException ex) {
@@ -109,6 +176,32 @@ public class ChordUI extends JFrame {
         for (int i = 0; i < node.finger.length; i++)
             sb.append("[" + i + "] -> ").append(node.finger[i]).append('\n');
         append(sb.toString());
+        refreshPeers();
+    }
+
+    private void refreshPeers() {
+        if (node == null)
+            return;
+        Set<NodeInfo> set = new LinkedHashSet<>();
+        if (node.successor != null)
+            set.add(node.successor);
+        if (node.predecessor != null)
+            set.add(node.predecessor);
+        if (node.finger != null) {
+            for (NodeInfo f : node.finger)
+                if (f != null)
+                    set.add(f);
+        }
+
+        // remove self from peers list
+        set.remove(node.self);
+
+        // update model
+        SwingUtilities.invokeLater(() -> {
+            peersModel.clear();
+            for (NodeInfo p : set)
+                peersModel.addElement(p);
+        });
     }
 
     private void append(String s) {
@@ -127,5 +220,30 @@ public class ChordUI extends JFrame {
             c.accept(node);
             SwingUtilities.invokeLater(this::updateStateDisplay);
         }).start();
+    }
+
+    public static void notifyFileReceived(java.io.File f) {
+        if (instance != null)
+            instance.showFileReceived(f);
+    }
+
+    private void showFileReceived(java.io.File f) {
+        SwingUtilities.invokeLater(() -> {
+            int r = JOptionPane.showOptionDialog(this,
+                    "Received file: " + f.getName() + "\nSaved: " + f.getAbsolutePath(),
+                    "File Received",
+                    JOptionPane.DEFAULT_OPTION,
+                    JOptionPane.INFORMATION_MESSAGE,
+                    null,
+                    new String[] { "Open Folder", "OK" },
+                    "OK");
+            if (r == 0) {
+                try {
+                    java.awt.Desktop.getDesktop().open(f.getParentFile());
+                } catch (Exception ex) {
+                    append("Could not open folder: " + ex.getMessage());
+                }
+            }
+        });
     }
 }
