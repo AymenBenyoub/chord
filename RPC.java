@@ -13,20 +13,25 @@ public class RPC {
     }
 
     static void notify(NodeInfo n, NodeInfo self) {
-        request(n, "NOTIFY " + self.id + " " + self.ip + " " + self.port);
+        request(n, "NOTIFY " + self.id + " " + self.ip + " " + self.port + " " + self.filePort);
     }
 
     private static NodeInfo request(NodeInfo n, String msg) {
         try (Socket s = new Socket(n.ip, n.port);
-             BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream()));
-             PrintWriter out = new PrintWriter(s.getOutputStream(), true)) {
+                BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream()));
+                PrintWriter out = new PrintWriter(s.getOutputStream(), true)) {
 
             out.println(msg);
             String res = in.readLine();
-            if (res == null || res.equals("NULL")) return null;
+            if (res == null || res.equals("NULL"))
+                return null;
 
             String[] p = res.split(" ");
-            return new NodeInfo(new BigInteger(p[1]), p[2], Integer.parseInt(p[3]));
+            if (p.length >= 5) {
+                return new NodeInfo(new BigInteger(p[1]), p[2], Integer.parseInt(p[3]), Integer.parseInt(p[4]));
+            } else {
+                return new NodeInfo(new BigInteger(p[1]), p[2], Integer.parseInt(p[3]));
+            }
         } catch (Exception e) {
             return null;
         }

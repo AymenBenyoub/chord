@@ -2,6 +2,7 @@ import java.io.*;
 import java.net.*;
 import java.util.logging.Logger;
 import java.math.BigInteger;
+
 public class Server extends Thread {
     private final ChordNode node;
     private final Logger logger = LogUtil.getLogger("Server-" + Thread.currentThread().threadId());
@@ -36,8 +37,12 @@ public class Server extends Thread {
                     out.println(node.predecessor == null ? "NULL" : "NODE " + node.predecessor);
                     break;
                 case "NOTIFY":
-                    node.notify(new NodeInfo(
-                            new BigInteger(cmd[1]), cmd[2], Integer.parseInt(cmd[3])));
+                    if (cmd.length >= 5) {
+                        node.notify(new NodeInfo(new BigInteger(cmd[1]), cmd[2], Integer.parseInt(cmd[3]),
+                                Integer.parseInt(cmd[4])));
+                    } else {
+                        node.notify(new NodeInfo(new BigInteger(cmd[1]), cmd[2], Integer.parseInt(cmd[3])));
+                    }
                     out.println("OK");
                     break;
                 default:
